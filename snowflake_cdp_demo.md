@@ -198,8 +198,25 @@ left join MARKETPLACE_ENRICHMENT.CONSUMER_ATTRIBUTES m
 If you want a turnkey identity + enrichment function without exposing PII, install the Verisk (Infutor) native app and invoke the provided stored procedure:
 
 1. **Install the app** – From Snowflake Marketplace search “Verisk Marketing Solutions Consumer Identity Resolution and Enrichment”, request the listing, and accept the terms. This deploys the `CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT` application into your account.
-2. **Prepare input table** – Ensure your raw table contains standard PII columns (`NAME`, `ADDRESS`, `CITY`, `STATE`, `ZIP`, `PHONE`, `EMAIL`). No need to share PII externally—the app runs inside your Snowflake account.
-3. **Invoke the enrichment function** – Swap in your database/schema/table names and desired product bundle (e.g., `tci attributes`, `auto`, `property`):
+2. **Configure logging (one-time)** – If you have not already configured native app logging, create an event database/schema/table and set it as the account-level event table so the VMS application can emit logs:
+
+```sql
+create database if not exists APP_EVENTS;
+create schema if not exists APP_EVENTS.PUBLIC;
+create event table if not exists APP_EVENTS.PUBLIC.NATIVE_APP_EVENTS;
+alter account set event_table = APP_EVENTS.PUBLIC.NATIVE_APP_EVENTS;
+```
+
+3. **Grant access to your input data** – Share only the database, schema, and table the app must read; all execution stays inside Snowflake:
+
+```sql
+grant usage on database DEMO_CDP to application CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT;
+grant usage on schema DEMO_CDP.RAW to application CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT;
+grant select on table DEMO_CDP.RAW.CUSTOMERS_PII to application CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT;
+```
+
+4. **Prepare input table** – Ensure your raw table contains standard PII columns (`NAME`, `ADDRESS`, `CITY`, `STATE`, `ZIP`, `PHONE`, `EMAIL`, optional DOB). No need to share PII externally—the app runs inside your Snowflake account.
+5. **Invoke the enrichment function** – Swap in your database/schema/table names, desired product bundle (e.g., `tci attributes`, `life events`), and method (`keying`, `enrichment`, `plus`):
 
 ```sql
 call CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT.APP_UTL.VMS_ENRICHMENT({
@@ -218,7 +235,16 @@ call CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT.APP_UTL.VMS_ENRICHMENT
 });
 ```
 
-4. **Consume outputs** – The resulting table contains persistent individual IDs (PID), household IDs (HHID), address IDs (ADDID), and extensive attribute bundles (demographics, property, auto). Join the PID back to `DEMO_CDP.ENRICHED.DIM_CUSTOMER` and treat it as the canonical `external_id` for Hightouch.
+6. **Copy outputs into your schema** – Native apps store data in their own `APP_DATA` schema. Copy the generated tables (e.g., `APP_DATA.CUSTOMERS_VMS_ENRICHED`) into `DEMO_CDP.ENRICHED` so they survive app upgrades and can be granted to Hightouch:
+
+```sql
+create or replace table DEMO_CDP.ENRICHED.CUSTOMERS_VMS_ENRICHED as
+select * from CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT.APP_DATA.CUSTOMERS_VMS_ENRICHED;
+```
+
+7. **(Optional) Clean up old runs** – Use `CALL <native_app>.APP_UTL.REMOVE_TABLE('<table_name>');` to delete obsolete tables within the app.
+
+8. **Consume outputs** – The resulting table contains persistent individual IDs (PID), household IDs (HHID), address IDs (ADDRID), match levels, and `VMS_ATTRIBUTES` JSON payloads (demographics, property, auto). Flatten what you need, join the PID back to `DEMO_CDP.ENRICHED.DIM_CUSTOMER`, and treat PID/HHID as the canonical `external_id` for Hightouch.
 
 #### Option B: Acxiom Data Enrichment Application
 
