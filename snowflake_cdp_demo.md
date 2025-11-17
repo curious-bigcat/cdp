@@ -30,7 +30,69 @@ Marketplace Listing --> Snowflake (Raw + Curated) --> Hightouch Sync --> Braze
 - Braze workspace API key with permission to update users.
 - Optional: dbt project or Snowflake-native tasks for model orchestration.
 
-## 4. Data Preparation Steps
+## 4. Step-by-Step Implementation Guide
+
+Use this checklist if you want a strictly sequential walkthrough. Each step references a deeper section below for the full SQL and screenshots.
+
+1. **Provision Snowflake + repositories**
+   - Run the following to create a dedicated warehouse, database, and schemas for the demo (adjust sizes/regions as needed):
+
+```sql
+use role accountadmin;
+create or replace warehouse DEMO_CDP_WH warehouse_size = 'XSMALL' auto_suspend = 60 auto_resume = true;
+create or replace database DEMO_CDP;
+create or replace schema DEMO_CDP.RAW;
+create or replace schema DEMO_CDP.ENRICHED;
+create or replace schema DEMO_CDP.ACTIVATION;
+use warehouse DEMO_CDP_WH;
+use database DEMO_CDP;
+use schema DEMO_CDP.RAW;
+```
+
+   - Clone this repo locally (`git clone https://github.com/curious-bigcat/cdp.git`) so you can follow along with the SQL snippets in `snowflake_cdp_demo.md`.
+
+2. **Seed first-party data (Section 5)**  
+   - Run the synthetic data generators for `CUSTOMERS`, `ORDERS`, and `EVENTS`.  
+   - Grant `SELECT` on `DEMO_CDP.RAW` to the Hightouch service role you’ll use later.
+
+3. **Subscribe to Marketplace enrichment (Section 5)**  
+   - From Snowsight ➜ Marketplace ➜ request the listing (e.g., LiveRamp, Equifax, Epsilon).  
+   - Execute the `create database ... from share ...` SQL and build the narrow projection view you need for the demo.
+
+4. **Resolve durable identity with LiveRamp (Section 5)**  
+   - Populate the metadata table, call `lr_resolution_and_transcoding`, and verify match quality via `__LR_FILTER_NAME`.  
+   - Join the resulting `LR_ID` back to your enriched customer view so it becomes the canonical `external_id`.
+
+5. **Curate activation-ready views (Section 5)**  
+   - Create `ENRICHED.DIM_CUSTOMER`, `ENRICHED.V_CUSTOMER_PROFILE`, and `ACTIVATION.V_LAPSED_PREMIUM`.  
+   - Optionally persist `ACTIVATION.EVENT_CONVERSIONS` if you want to drive Meta CAPI later.
+
+6. **Configure Hightouch source and model (Section 6)**  
+   - In Hightouch, connect the Snowflake warehouse using the service account.  
+   - Import `ACTIVATION.V_LAPSED_PREMIUM` (SQL, dbt, or table selector) and set `customer_id`/`LR_ID` as the primary key.
+
+7. **Set up Braze destinations (Sections 6 & 7)**  
+   - Destination 1: Braze Users via Hightouch (map enrichment fields, enable hashing if needed).  
+   - Optional Destination 2: Braze Cloud Data Ingestion (create `users_attributes_sync` table/views and configure the CDI connection in Braze using key-pair auth).
+
+8. **Run the Hightouch sync + validate (Section 6)**  
+   - Trigger a manual sync, confirm row counts, and screenshot the upsert log.  
+   - In Braze, query the segment (`lifestyle_cluster = Premium Adventurers`) to ensure attributes landed.
+
+9. **Build and preview the Braze campaign (Section 7)**  
+   - Create the Canvas/Email draft with personalization tokens (`{{custom_attribute.lifestyle_cluster}}`).  
+   - Send a test message to a user from the activation view and show dynamic content.
+
+10. **Extend to Facebook Conversions API (Section 8)**  
+    - Add a Facebook CAPI destination in Hightouch, create the conversion event model, map user data, and schedule the sync (15-min cadence recommended).
+
+11. **Extend to YouTube suppression (Section 8)**  
+    - Enable Hightouch Audiences, configure the parent model on `DIM_CUSTOMER`, build the `YT_Suppression` audience, and sync it to Google Ads Customer Match.
+
+12. **Close the loop with Cortex analytics (Section 9)**  
+    - Land Braze engagement data back in Snowflake (Snowpipe/webhook), populate the `BRAZE_ENGAGEMENT` schema, enable Cortex cross-region, and deploy the Streamlit “Marketing Insight Navigator” for natural-language measurement.
+
+## 5. Data Preparation Steps
 
 ### Base demo dataset (first-party)
 
@@ -206,7 +268,7 @@ where last_purchase_at < dateadd(month, -3, current_date())
    - Persist the resolved IDs in `ENRICHED.DIM_CUSTOMER` (or downstream view) so Braze, Meta, and Google all receive the same `external_id`.
    - If you need partner-specific RampIDs (e.g., `LR_PARTNER_META`, `LR_PARTNER_GOOGLE`), rerun the app in **translation** mode so you can demo end-to-end partner onboarding without exporting PII.
 
-## 5. Hightouch Configuration
+## 6. Hightouch Configuration
 
 1. **Source setup**
    - Connect Snowflake using the service user.
@@ -260,7 +322,7 @@ select external_id, updated_at from braze_cloud_production.ingestion.users_attri
 
 3. **Automate with streams + tasks** – Create a stream on your activation table, copy deltas into `users_attributes_sync`, and schedule a Snowflake task to run every few minutes so Braze CDI polls fresh payloads while Hightouch continues to drive high-frequency reverse ETL jobs.
 
-## 6. Braze Demo Flow
+## 7. Braze Demo Flow
 
 1. **Segment verification**
    - In Braze, filter on `lifestyle_cluster = Premium Adventurers` and `last_purchase_at > 90 days`.
@@ -276,7 +338,7 @@ select external_id, updated_at from braze_cloud_production.ingestion.users_attri
    - Use test user seeded from activation view.
    - Highlight dynamic content capabilities.
 
-## 7. Paid Media Extensions with Hightouch
+## 8. Paid Media Extensions with Hightouch
 
 ### Facebook Conversions API signal boost
 
@@ -309,13 +371,13 @@ The **Suppress Existing Customers from YouTube Campaigns** quickstart gives you 
 - **Destination** – Add a Google Ads Customer Match destination (OAuth login), select the `Customer List` subtype for YouTube, and choose hashed email/phone identifiers produced via LiveRamp.
 - **Automation** – Run the audience sync once live, then schedule it hourly so any new purchasers automatically flow into Google Ads suppression lists, protecting budget.
 
-## 8. Marketplace Storytelling Tips
+## 9. Marketplace Storytelling Tips
 
 - Emphasize zero-copy data sharing and governance controls.
 - Call out speed to value: no new pipelines needed, share becomes instantly queryable.
 - Mention option to rotate among different data providers depending on vertical.
 
-## 9. Measurement & Loop Closure
+## 10. Measurement & Loop Closure
 
 - Create a Braze webhook or S3 export into Snowflake stage.
 - Use Snowpipe to land engagement events (`EMAIL_OPEN`, `CLICK`).
@@ -351,7 +413,7 @@ join RAW.BRAZE_EVENTS e
   on e.external_id = l.customer_id;
 ```
 
-## 10. Demo Script (10–12 minutes)
+## 11. Demo Script (10–12 minutes)
 
 1. **Context (1 min)** – Business challenge and goal.
 2. **Snowflake (3 min)** – Show Marketplace listing, share, curated views.
@@ -360,7 +422,7 @@ join RAW.BRAZE_EVENTS e
 5. **Braze (2–3 min)** – Segment appears, preview personalized campaign.
 6. **Wrap (1 min)** – Metrics flowing back, next steps (automate, expand providers).
 
-## 11. Assets Checklist
+## 12. Assets Checklist
 
 - Slides: 3–4 supporting visuals (architecture, data flow, value prop).
 - Snowflake worksheet with SQL snippets above.
@@ -373,7 +435,7 @@ join RAW.BRAZE_EVENTS e
 
 Use this plan as a script plus technical blueprint. Swap specific data providers or audience segments based on who you are demoing to, but keep the zero-copy enrichment + activation narrative consistent.
 
-## 12. Reference Playbooks to Borrow From
+## 13. Reference Playbooks to Borrow From
 
 - **Braze Cloud Data Ingestion (CDI) Quickstart** – Shows how to create the dedicated Snowflake role/user/warehouse, `users_attributes_sync` table, and companion views that Braze polls. Reuse the stream-and-task pattern documented there if you want to automate attribute payload generation instead of relying solely on Hightouch.
 - **AI-Powered Campaign Analytics with Braze + Snowflake Cortex** – Provides end-to-end instructions for standing up the Cortex semantic model, metrics, and Streamlit “Marketing Insight Navigator” app. Great for the measurement portion of the story or for a follow-on demo on AI-assisted campaign analytics.
