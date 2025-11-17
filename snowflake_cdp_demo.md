@@ -12,7 +12,7 @@ This guide outlines a reproducible demo that showcases how a Snowflake-centric c
 ## 2. Reference Architecture
 
 - **Snowflake** – Central warehouse, houses raw events, curated profiles, and Marketplace shares.
-- **Snowflake Marketplace Data Product** – e.g., LiveRamp Consumer Attributes (or any enrichment provider the audience recognizes). Consumed via reader account or listing subscription.
+- **Snowflake Marketplace Data Products** – Verisk Marketing Solutions Consumer Identity Resolution & Enrichment and Acxiom Data Enrichment applications (or similar providers). Both run natively in Snowflake so PII never leaves your account.
 - **Hightouch** – Reverse ETL platform reading Snowflake tables/views and writing to Braze Users or Custom Attributes endpoints.
 - **Braze** – Engagement platform receiving enriched traits for segmentation and campaign personalization.
 
@@ -55,13 +55,13 @@ use schema DEMO_CDP.RAW;
    - Run the synthetic data generators for `CUSTOMERS`, `ORDERS`, and `EVENTS`.  
    - Grant `SELECT` on `DEMO_CDP.RAW` to the Hightouch service role you’ll use later.
 
-3. **Subscribe to Marketplace enrichment (Section 5)**  
-   - From Snowsight ➜ Marketplace ➜ request the listing (e.g., LiveRamp, Equifax, Epsilon).  
-   - Execute the `create database ... from share ...` SQL and build the narrow projection view you need for the demo.
+3. **Install Marketplace enrichment apps (Section 5)**  
+   - From Snowsight ➜ Marketplace ➜ request the Verisk Consumer Identity Resolution & Enrichment app and the Acxiom Data Enrichment app.  
+   - Follow each provider’s setup instructions so they can read your Snowflake tables (they execute within your account; no PII leaves Snowflake).
 
-4. **Resolve durable identity with LiveRamp (Section 5)**  
-   - Populate the metadata table, call `lr_resolution_and_transcoding`, and verify match quality via `__LR_FILTER_NAME`.  
-   - Join the resulting `LR_ID` back to your enriched customer view so it becomes the canonical `external_id`.
+4. **Run Verisk + Acxiom enrichments (Section 5)**  
+   - Execute the Verisk `VMS_ENRICHMENT` stored procedure and the Acxiom `ENRICH` procedure to create persistent IDs (PID, HHID, Real ID) and attribute bundles.  
+   - Join those outputs back to your enriched customer view so the PID (or hashed email) becomes the canonical `external_id`.
 
 5. **Curate activation-ready views (Section 5)**  
    - Create `ENRICHED.DIM_CUSTOMER`, `ENRICHED.V_CUSTOMER_PROFILE`, and `ACTIVATION.V_LAPSED_PREMIUM`.  
@@ -69,7 +69,7 @@ use schema DEMO_CDP.RAW;
 
 6. **Configure Hightouch source and model (Section 6)**  
    - In Hightouch, connect the Snowflake warehouse using the service account.  
-   - Import `ACTIVATION.V_LAPSED_PREMIUM` (SQL, dbt, or table selector) and set `customer_id`/`LR_ID` as the primary key.
+   - Import `ACTIVATION.V_LAPSED_PREMIUM` (SQL, dbt, or table selector) and set `customer_id` or the Verisk/Acxiom persistent ID as the primary key.
 
 7. **Set up Braze destinations (Sections 6 & 7)**  
    - Destination 1: Braze Users via Hightouch (map enrichment fields, enable hashing if needed).  
@@ -89,7 +89,7 @@ use schema DEMO_CDP.RAW;
 11. **Extend to YouTube suppression (Section 8)**  
     - Enable Hightouch Audiences, configure the parent model on `DIM_CUSTOMER`, build the `YT_Suppression` audience, and sync it to Google Ads Customer Match.
 
-12. **Close the loop with Cortex analytics (Section 9)**  
+12. **Close the loop with Cortex analytics (Section 10)**  
     - Land Braze engagement data back in Snowflake (Snowpipe/webhook), populate the `BRAZE_ENGAGEMENT` schema, enable Cortex cross-region, and deploy the Streamlit “Marketing Insight Navigator” for natural-language measurement.
 
 ## 5. Data Preparation Steps
@@ -160,7 +160,7 @@ left join DEMO_CDP.RAW.ORDERS o using(customer_id);
 
 ### Marketplace enrichment touchpoint
 
-Pull a lifestyle/propensity dataset from Snowflake Marketplace and attach it to those base profiles. Replace the listing names with the actual share you subscribe to—if you are already using LiveRamp’s native app you can double-dip and pull their enrichment feeds as well.
+Pull lifestyle/propensity datasets from Snowflake Marketplace and attach them to those base profiles. This demo spotlights the Verisk Consumer Identity Resolution & Enrichment app plus the Acxiom Data Enrichment app, but you can swap in any provider your audience recognizes.
 
 ```sql
 -- Once approved for the listing, create the zero-copy database
@@ -193,34 +193,56 @@ left join MARKETPLACE_ENRICHMENT.CONSUMER_ATTRIBUTES m
     on m.email_hash = sha2(lower(d.email), 256);
 ```
 
-### Identity key + partner translation (LiveRamp reference)
+#### Option A: Verisk Marketing Solutions (Consumer Identity Resolution & Enrichment)
 
-Anchor your activation schema on a durable identity that every downstream partner (Braze, Meta, Google, Retail Media) can accept. Follow the **LiveRamp Identity and Translation Quickstart**:
+If you want a turnkey identity + enrichment function without exposing PII, install the Verisk (Infutor) native app and invoke the provided stored procedure:
 
-1. **Install the native app** – Request access to the LiveRamp Identity Resolution & Transcoding application in your Snowflake region.
-2. **Create input + metadata tables** – Store raw PII in `DEMO_CDP.RAW.CUSTOMERS_PII` and describe each column in the metadata table using their template:
+1. **Install the app** – From Snowflake Marketplace search “Verisk Marketing Solutions Consumer Identity Resolution and Enrichment”, request the listing, and accept the terms. This deploys the `CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT` application into your account.
+2. **Prepare input table** – Ensure your raw table contains standard PII columns (`NAME`, `ADDRESS`, `CITY`, `STATE`, `ZIP`, `PHONE`, `EMAIL`). No need to share PII externally—the app runs inside your Snowflake account.
+3. **Invoke the enrichment function** – Swap in your database/schema/table names and desired product bundle (e.g., `tci attributes`, `auto`, `property`):
 
 ```sql
-create or replace table DEMO_CDP.RAW.CUSTOMER_IDENTITY_META as
-select
-    '<client_id>' as client_id,
-    '<client_secret>' as client_secret,
-    'resolution' as execution_mode,
-    'pii' as execution_type,
-    parse_json('{
-      "name": ["first_name","last_name"],
-      "streetAddress": ["street_1","street_2"],
-      "city": "city",
-      "state": "state",
-      "zipCode": "postal_code",
-      "phone": "phone_number",
-      "email": "email"
-    }') as target_columns,
-    1 as limit;
+call CONSUMER_INSIGHTS_IDENTITY_RESOLUTION_AND_ENRICHMENT.APP_UTL.VMS_ENRICHMENT({
+  'input_table': 'DEMO_CDP.RAW.CUSTOMERS_PII',
+  'output_table': 'CUSTOMERS_VMS_ENRICHED',
+  'product_name': 'tci attributes',
+  'method': 'plus',
+  'name': ['FULL_NAME'],
+  'address': 'ADDRESS',
+  'city': 'CITY',
+  'state': 'STATE',
+  'zip': 'ZIP',
+  'phone': 'PHONE',
+  'pid_key': 'PID',
+  'hhid_key': 'HHID'
+});
 ```
 
-3. **Run the stored procedures** – Call `lr_resolution_and_transcoding(<input_table>, <meta_table>, <output_table>)` followed by `check_for_output($output_table)` to materialize the resolved IDs.
-4. **Audit + join** – Use the output table’s `__LR_FILTER_NAME` and `__LR_RANK` columns to show match quality, then join the durable `LR_ID` back into `DEMO_CDP.ENRICHED.V_MPX_ENRICHED`. This is the same ID you will pass along through Hightouch to Braze, Meta CAPI, and Google Ads audiences.
+4. **Consume outputs** – The resulting table contains persistent individual IDs (PID), household IDs (HHID), address IDs (ADDID), and extensive attribute bundles (demographics, property, auto). Join the PID back to `DEMO_CDP.ENRICHED.DIM_CUSTOMER` and treat it as the canonical `external_id` for Hightouch.
+
+#### Option B: Acxiom Data Enrichment Application
+
+Acxiom’s application also runs natively in Snowflake and generates their Real ID without moving PII outside your account.
+
+1. **Install the Acxiom app** – Locate “Acxiom Data Enrichment” in Marketplace (trial includes 1,000 free enrichments). Accept terms to provision the application in your account.
+2. **Grant access** – Follow the provider’s instructions to allow the application to read your input table (role-based privileges only).
+3. **Run the enrichment packages** – Choose the bundle (`Demographics`, `Economic Assessment`, `Segmentation/Personicx`, or industry vertical propensities). For example, once installed you can run:
+
+```sql
+call ACXIOM_DATA_ENRICHMENT.APP_UTL.ENRICH({
+  'input_table': 'DEMO_CDP.RAW.CUSTOMERS_PII',
+  'output_table': 'CUSTOMERS_ACXIOM_ENRICHED',
+  'bundle': 'personicx',
+  'name': ['FIRST_NAME','LAST_NAME'],
+  'address': 'ADDRESS',
+  'city': 'CITY',
+  'state': 'STATE',
+  'zip': 'ZIP',
+  'email': 'EMAIL'
+});
+```
+
+4. **Leverage enriched attributes** – The output exposes over 600 demographics, Personicx segments, economic indicators, and vertical propensity scores. Add the columns you need to `DEMO_CDP.ENRICHED.V_MPX_ENRICHED` and activate them via Hightouch and Braze.
 
 1. **Ingest first-party data**
    - Load clickstream, orders, subscription status into `RAW.EVENTS`, `RAW.ORDERS`, etc.
@@ -264,9 +286,9 @@ where last_purchase_at < dateadd(month, -3, current_date())
 ```
 
 5. **Resolve durable identity + translation**
-   - Use the LiveRamp native app output from the earlier subsection to stitch multiple identifiers (email, phone, postal) into a single `LR_ID`.
+   - Use the Verisk PID/HHID outputs or Acxiom Real ID to stitch multiple identifiers (email, phone, postal) into a single persistent key.
    - Persist the resolved IDs in `ENRICHED.DIM_CUSTOMER` (or downstream view) so Braze, Meta, and Google all receive the same `external_id`.
-   - If you need partner-specific RampIDs (e.g., `LR_PARTNER_META`, `LR_PARTNER_GOOGLE`), rerun the app in **translation** mode so you can demo end-to-end partner onboarding without exporting PII.
+   - If you add other identity apps later, follow the same pattern but it is not required for this demo.
 
 ## 6. Hightouch Configuration
 
@@ -351,7 +373,7 @@ Leverage the **Improving Ad Performance with Facebook CAPI** quickstart to exten
 select
     e.event_id,
     e.event_ts,
-    c.lr_id as external_id,
+    c.pid as external_id,
     c.email,
     c.phone,
     c.ltv_bucket,
@@ -368,7 +390,7 @@ The **Suppress Existing Customers from YouTube Campaigns** quickstart gives you 
 
 - **Test data** – Reuse the `customer_sales` view from the guide or point the parent model at `DEMO_CDP.ENRICHED.DIM_CUSTOMER`.
 - **Parent model + audiences** – In Hightouch Audiences, configure the parent model with `customer_id` as the key, add a condition like “`last_order_date is within 60 days`” to capture recently converted users, and save it as `YT_Suppression`.
-- **Destination** – Add a Google Ads Customer Match destination (OAuth login), select the `Customer List` subtype for YouTube, and choose hashed email/phone identifiers produced via LiveRamp.
+- **Destination** – Add a Google Ads Customer Match destination (OAuth login), select the `Customer List` subtype for YouTube, and choose hashed email/phone identifiers or Verisk PID/HHID values generated inside Snowflake.
 - **Automation** – Run the audience sync once live, then schedule it hourly so any new purchasers automatically flow into Google Ads suppression lists, protecting budget.
 
 ## 9. Marketplace Storytelling Tips
@@ -441,5 +463,6 @@ Use this plan as a script plus technical blueprint. Swap specific data providers
 - **AI-Powered Campaign Analytics with Braze + Snowflake Cortex** – Provides end-to-end instructions for standing up the Cortex semantic model, metrics, and Streamlit “Marketing Insight Navigator” app. Great for the measurement portion of the story or for a follow-on demo on AI-assisted campaign analytics.
 - **Improving Ad Performance with Facebook CAPI via Hightouch** – Demonstrates how the same Snowflake audience tables can drive paid media conversion signals. Use it when you want to expand the narrative from Braze to performance ads or show multi-channel activation from a single activation schema.
 - **Suppress Existing Customers from YouTube Campaigns with Hightouch** – Offers a no-code Hightouch Audiences flow for suppression lists. Reference it when discussing privacy-safe opt-out handling, or when audience asks how to operationalize exclusion segments alongside the Braze re-engagement campaign.
-- **LiveRamp Identity & Translation Quickstart** – Details how to install the native application, configure metadata, execute resolution/transcoding, and audit match filters so you can showcase durable IDs and partner-specific RampIDs without exposing raw PII.
+- **Verisk Marketing Solutions Consumer Identity Resolution & Enrichment** – Marketplace documentation covering how to install the app, call `VMS_ENRICHMENT`, and interpret PID/HHID outputs plus demographic/property/auto attributes.
+- **Acxiom Data Enrichment Application** – User guide outlining how to generate Real ID inside Snowflake and append demographic, economic, Personicx, and vertical propensity bundles for activation.
 
