@@ -4,7 +4,7 @@
 /*
 Section 0. Configure Acxiom app references (update to match your install)
 */
-set app_db_name = 'AURORA_APP'; -- e.g., ACXIOM_DAI or whatever Marketplace created
+set app_db_name = 'ACXIOM_DATA_ENRICHMENT'; -- default Marketplace name (update if yours differs)
 set app_app_schema = 'APP_PUBLIC'; -- schema that hosts stored procedures
 set app_results_schema = 'REALID_RESULTS'; -- schema that stores enrichment outputs
 set app_results_table = 'CUSTOMER_ENRICH_INPUT_DATAENRICHMENT'; -- adjust if your input view name differs
