@@ -2,6 +2,14 @@
 -- Purpose: Provision core Snowflake objects, seed demo data, and run the Acxiom Data Enrichment native app.
 
 /*
+Section 0. Configure Acxiom app references (update to match your install)
+*/
+set app_db_name = 'AURORA_APP'; -- e.g., ACXIOM_DAI or whatever Marketplace created
+set app_app_schema = 'APP_PUBLIC'; -- schema that hosts stored procedures
+set app_results_schema = 'REALID_RESULTS'; -- schema that stores enrichment outputs
+set app_results_table = 'CUSTOMER_ENRICH_INPUT_DATAENRICHMENT'; -- adjust if your input view name differs
+
+/*
 Section 1. Administrative prep (run as ACCOUNTADMIN)
 */
 use role accountadmin;
@@ -86,21 +94,21 @@ from aurora_cdp.raw.customers_pi;
 /*
 Section 5. Inspect Acxiom native app inventory (optional)
 */
-use database aurora_app;
+use database identifier($app_db_name);
 
-show terse objects in database aurora_app;
+show terse objects in database identifier($app_db_name);
 
-select * from aurora_app.information_view.tables order by table_schema, table_name;
-select * from aurora_app.information_view.functions order by function_schema, function_name;
-select * from aurora_app.information_view.packages order by package_name;
-select * from aurora_app.information_view.roles order by role_name;
+select * from identifier($app_db_name || '.INFORMATION_VIEW.TABLES') order by table_schema, table_name;
+select * from identifier($app_db_name || '.INFORMATION_VIEW.FUNCTIONS') order by function_schema, function_name;
+select * from identifier($app_db_name || '.INFORMATION_VIEW.PACKAGES') order by package_name;
+select * from identifier($app_db_name || '.INFORMATION_VIEW.ROLES') order by role_name;
 
 /*
 Section 6. Run Acxiom DATA_ENRICHMENT stored procedure
 - Install the "Acxiom Data Enrichment" native app from Marketplace first, using database AURORA_APP
 - Replace the schema/database below if your app name differs
 */
-use schema app_public;   -- refer to README in the app for the exact schema name
+use schema identifier($app_app_schema);   -- refer to README in the app for the exact schema name
 
 call data_enrichment('AURORA_CDP.MODEL.CUSTOMER_ENRICH_INPUT');
 
@@ -113,7 +121,7 @@ use schema app;
 create or replace table customer_enriched as
 select src.*, enr.*
 from aurora_cdp.raw.customers_pi src
-join aurora_app.realid_results.customer_enrich_input_dataenrichment enr
+join identifier($app_db_name || '.' || $app_results_schema || '.' || $app_results_table) enr
   on src.recordId = enr.recordId;
 
 /*
@@ -123,7 +131,7 @@ select count(*) total_records,
        count(enr.recordId) matched_records,
        round(count(enr.recordId)/count(*)*100,2) match_pct
 from aurora_cdp.raw.customers_pi src
-left join aurora_app.realid_results.customer_enrich_input_dataenrichment enr
+left join identifier($app_db_name || '.' || $app_results_schema || '.' || $app_results_table) enr
   on src.recordId = enr.recordId;
 
 select loyalty_tier,
@@ -137,8 +145,8 @@ order by avg_ltv desc;
 /*
 Section 9. Task to refresh enrichment monthly (optional)
 */
-use database aurora_app;
-use schema app_public;
+use database identifier($app_db_name);
+use schema identifier($app_app_schema);
 
 create or replace task data_enrichment_monthly
   warehouse = aurora_cdp_wh
