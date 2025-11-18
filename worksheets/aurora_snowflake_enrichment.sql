@@ -21,7 +21,12 @@ grant usage on warehouse aurora_cdp_wh to role aurora_cdp_admin;
 create or replace database aurora_cdp;
 grant usage on database aurora_cdp to role aurora_cdp_admin;
 
-grant ownership on schema aurora_cdp.public to role aurora_cdp_admin;
+-- Transfer ownership so aurora_cdp_admin can manage objects without privilege issues
+grant ownership on database aurora_cdp to role aurora_cdp_admin revoke current grants;
+grant usage on database aurora_cdp to role accountadmin;
+
+grant ownership on schema aurora_cdp.public to role aurora_cdp_admin revoke current grants;
+grant usage on schema aurora_cdp.public to role accountadmin;
 
 alter user <your_user> set default_role = aurora_cdp_admin, default_warehouse = aurora_cdp_wh, default_namespace = aurora_cdp.public;
 
