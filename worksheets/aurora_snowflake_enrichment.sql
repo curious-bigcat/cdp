@@ -84,17 +84,28 @@ select recordId, first, middle, last, suffix,
 from aurora_cdp.raw.customers_pi;
 
 /*
-Section 5. Run Acxiom DATA_ENRICHMENT stored procedure
+Section 5. Inspect Acxiom native app inventory (optional)
+*/
+use database aurora_app;
+
+show terse objects in database aurora_app;
+
+select * from aurora_app.information_view.tables order by table_schema, table_name;
+select * from aurora_app.information_view.functions order by function_schema, function_name;
+select * from aurora_app.information_view.packages order by package_name;
+select * from aurora_app.information_view.roles order by role_name;
+
+/*
+Section 6. Run Acxiom DATA_ENRICHMENT stored procedure
 - Install the "Acxiom Data Enrichment" native app from Marketplace first, using database AURORA_APP
 - Replace the schema/database below if your app name differs
 */
-use database aurora_app; -- created by the Marketplace install
 use schema app_public;   -- refer to README in the app for the exact schema name
 
 call data_enrichment('AURORA_CDP.MODEL.CUSTOMER_ENRICH_INPUT');
 
 /*
-Section 6. Persist enriched results back into the CDP schema
+Section 7. Persist enriched results back into the CDP schema
 */
 use database aurora_cdp;
 use schema app;
@@ -106,7 +117,7 @@ join aurora_app.realid_results.customer_enrich_input_dataenrichment enr
   on src.recordId = enr.recordId;
 
 /*
-Section 7. Quality checks & KPIs
+Section 8. Quality checks & KPIs
 */
 select count(*) total_records,
        count(enr.recordId) matched_records,
@@ -124,7 +135,7 @@ group by 1
 order by avg_ltv desc;
 
 /*
-Section 8. Task to refresh enrichment monthly (optional)
+Section 9. Task to refresh enrichment monthly (optional)
 */
 use database aurora_app;
 use schema app_public;
